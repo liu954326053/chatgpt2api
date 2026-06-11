@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 
-os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
+os.environ.setdefault("CHATGPT2API_AUTH_KEY", "chatgpt2api")
 
 from services.register import openai_register
 

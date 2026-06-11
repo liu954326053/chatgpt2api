@@ -225,16 +225,16 @@ export type ImageResponse = {
 
 export type ImageTask = {
   id: string;
-  status: "queued" | "running" | "success" | "error";
-  mode: "generate" | "edit";
+  status: "queued" | "running" | "success" | "error" | "succeeded" | "failed";
+  mode?: "generate" | "edit";
   model?: ImageModel;
   size?: string;
   quality?: string;
-  created_at: string;
-  updated_at: string;
+  created_at?: string;
+  updated_at?: string;
   conversation_id?: string;
   data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
-  error?: string;
+  error?: string | { message?: string; type?: string; code?: string };
   progress?: string;
   elapsed_secs?: number;
   duration_ms?: number;
@@ -439,7 +439,7 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
 }
 
 export async function createImageGenerationTask(clientTaskId: string, prompt: string, model?: ImageModel, size?: string, quality = "auto") {
-  return httpRequest<ImageTask>("/api/image-tasks/generations", {
+  return httpRequest<ImageTask>("/v1/images/generations", {
     method: "POST",
     body: {
       client_task_id: clientTaskId,
@@ -447,6 +447,9 @@ export async function createImageGenerationTask(clientTaskId: string, prompt: st
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
       quality,
+      n: 1,
+      response_format: "url",
+      background: true,
     },
   });
 }

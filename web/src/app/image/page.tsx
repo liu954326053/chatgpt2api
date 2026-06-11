@@ -202,8 +202,15 @@ async function buildReferenceImageFromStoredImage(image: StoredImage, fileName: 
   };
 }
 
+function taskErrorMessage(error: ImageTask["error"]): string {
+  if (typeof error === "string") {
+    return error;
+  }
+  return error?.message || "生成失败";
+}
+
 function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage {
-  if (task.status === "success") {
+  if (task.status === "success" || task.status === "succeeded") {
     const first = task.data?.[0];
     if (!first?.b64_json && !first?.url) {
       return {
@@ -229,14 +236,14 @@ function taskDataToStoredImage(image: StoredImage, task: ImageTask): StoredImage
     };
   }
 
-  if (task.status === "error") {
+  if (task.status === "error" || task.status === "failed") {
     return {
       ...image,
       taskId: task.id,
       status: "error",
       taskStatus: undefined,
       progress: undefined,
-      error: task.error || "生成失败",
+      error: taskErrorMessage(task.error),
       durationMs: task.duration_ms,
     };
   }
@@ -1241,8 +1248,8 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               // 检测是否有超时错误且需要显示重试按钮
               const timeoutTask = taskList.items.find(
                 (task) =>
-                  task.status === "error" &&
-                  task.error?.includes("超时") &&
+                  (task.status === "error" || task.status === "failed") &&
+                  taskErrorMessage(task.error).includes("超时") &&
                   task.conversation_id &&
                   !retryingTaskIdsRef.has(task.id),
               );
@@ -1251,7 +1258,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                 setTimeoutRetry({
                   conversationId: timeoutTask.conversation_id,
                   taskId: timeoutTask.id,
-                  taskError: timeoutTask.error || "生图超时",
+                  taskError: taskErrorMessage(timeoutTask.error),
                 });
                 // 应用超时错误到对应图片，显示继续等待按钮
                 await applyTasks([timeoutTask]);

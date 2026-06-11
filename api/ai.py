@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from uuid import uuid4
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -9,6 +12,7 @@ from api.image_inputs import parse_image_edit_request, read_image_sources
 from api.support import require_identity, resolve_image_base_url
 from services.content_filter import check_request, request_shape, request_text
 from services.editable_file_task_service import editable_file_task_service
+from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
 from services.protocol import (
     anthropic_v1_messages,
@@ -30,6 +34,8 @@ class ImageGenerationRequest(BaseModel):
     response_format: str = "b64_json"
     history_disabled: bool = True
     stream: bool | None = None
+    background: bool | str = False
+    client_task_id: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -77,6 +83,82 @@ async def filter_or_log(call: LoggedCall, text: str) -> None:
         raise
 
 
+def _task_created_at(task: dict[str, object]) -> int:
+    value = str(task.get("created_at") or "").strip()
+    if value:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                from datetime import datetime
+
+                return int(datetime.strptime(value[:26], fmt).timestamp())
+            except ValueError:
+                continue
+        try:
+            from datetime import datetime
+
+            return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            pass
+    return int(time.time())
+
+
+def _image_task_status(status: object) -> str:
+    value = str(status or "").strip().lower()
+    if value == "success":
+        return "succeeded"
+    if value == "error":
+        return "failed"
+    if value in {"running", "queued"}:
+        return value
+    return "queued"
+
+
+def _image_generation_task_response(task: dict[str, object]) -> dict[str, object]:
+    status = _image_task_status(task.get("status"))
+    response: dict[str, object] = {
+        "id": str(task.get("id") or ""),
+        "object": "image.generation",
+        "status": status,
+        "created": _task_created_at(task),
+    }
+    if task.get("model"):
+        response["model"] = task.get("model")
+    if task.get("progress"):
+        response["progress"] = task.get("progress")
+    if task.get("elapsed_secs") is not None:
+        response["elapsed_secs"] = task.get("elapsed_secs")
+    if task.get("conversation_id"):
+        response["conversation_id"] = task.get("conversation_id")
+    if status == "succeeded":
+        response["data"] = task.get("data") if isinstance(task.get("data"), list) else []
+        if isinstance(task.get("usage"), dict):
+            response["usage"] = task.get("usage")
+        if task.get("duration_ms") is not None:
+            response["duration_ms"] = task.get("duration_ms")
+    elif status == "failed":
+        response["error"] = {
+            "message": str(task.get("error") or "image generation failed"),
+            "type": "image_generation_error",
+            "code": "image_generation_failed",
+        }
+        if task.get("duration_ms") is not None:
+            response["duration_ms"] = task.get("duration_ms")
+    return response
+
+
+def _background_task_id(value: str | None) -> str:
+    task_id = str(value or "").strip()
+    return task_id or f"imgtask_{uuid4().hex}"
+
+
+def _is_background_task(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def create_router() -> APIRouter:
     router = APIRouter()
 
@@ -99,7 +181,33 @@ def create_router() -> APIRouter:
         payload["base_url"] = resolve_image_base_url(request)
         call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图", request_text=body.prompt)
         await filter_or_log(call, body.prompt)
+        if _is_background_task(body.background):
+            if body.stream:
+                raise HTTPException(status_code=400, detail={"error": "background tasks do not support stream=true"})
+            task = await run_in_threadpool(
+                image_task_service.submit_generation,
+                identity,
+                client_task_id=_background_task_id(body.client_task_id),
+                prompt=body.prompt,
+                model=body.model,
+                size=body.size,
+                quality=body.quality,
+                n=body.n,
+                response_format=body.response_format,
+                base_url=payload["base_url"],
+            )
+            call.log("后台任务已创建", {"task_id": task.get("id"), "status": task.get("status")})
+            return _image_generation_task_response(task)
         return await call.run(openai_v1_image_generations.handle, payload)
+
+    @router.get("/v1/images/generations/{task_id}")
+    async def get_image_generation_task(task_id: str, authorization: str | None = Header(default=None)):
+        identity = require_identity(authorization)
+        result = await run_in_threadpool(image_task_service.list_tasks, identity, [task_id])
+        items = result.get("items") if isinstance(result, dict) else []
+        if not isinstance(items, list) or not items:
+            raise HTTPException(status_code=404, detail={"error": "image generation task not found"})
+        return _image_generation_task_response(items[0])
 
     @router.post("/v1/images/edits")
     async def edit_images(

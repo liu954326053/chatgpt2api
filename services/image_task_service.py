@@ -128,15 +128,21 @@ class ImageTaskService:
         model: str,
         size: str | None,
         quality: str = "auto",
+        n: int = 1,
+        response_format: str = "url",
         base_url: str = "",
     ) -> dict[str, Any]:
+        try:
+            count = max(1, int(n or 1))
+        except Exception:
+            count = 1
         payload = {
             "prompt": prompt,
             "model": model,
-            "n": 1,
+            "n": count,
             "size": size,
             "quality": quality,
-            "response_format": "url",
+            "response_format": _clean(response_format, "url"),
             "base_url": base_url,
         }
         return self._submit(identity, client_task_id=client_task_id, mode="generate", payload=payload)
