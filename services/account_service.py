@@ -597,11 +597,10 @@ class AccountService:
         platform_oauth_redirect_uri = "https://platform.openai.com/auth/callback"
         user_agent = self._OAUTH_USER_AGENT
         
-        # 创建 session
-        session_kwargs = {"impersonate": "chrome110", "verify": False}
-        proxy = config.get_proxy_settings()
-        if proxy:
-            session_kwargs["proxy"] = proxy
+        # 创建 session，使用全局代理池轮询，避免固定打到同一个代理。
+        from services.proxy_service import proxy_settings
+
+        session_kwargs = proxy_settings.build_session_kwargs(impersonate="chrome110", verify=False)
         session = requests.Session(**session_kwargs)
         
         try:
@@ -897,16 +896,30 @@ class AccountService:
             plan_types: set[str] | tuple[str, ...] | None = None,
     ) -> list[str]:
         excluded = set(excluded_tokens or set())
-        return [
-            token
+        candidates = [
+            item
             for item in self._accounts.values()
             if self._is_image_account_available(item)
                and self._account_matches_plan_type(item, plan_type)
                and self._account_matches_any_plan_type(item, plan_types)
                and self._account_matches_source_type(item, source_type)
-               and (token := item.get("access_token") or "")
-               and token not in excluded
+               and str(item.get("access_token") or "").strip()
+               and str(item.get("access_token") or "").strip() not in excluded
         ]
+
+        def score(item: dict) -> tuple[int, int, str]:
+            quota = max(0, int(item.get("quota") or 0))
+            # Prefer accounts with confirmed remaining image2 quota, then
+            # unknown-quota accounts, then older/zero cached accounts.
+            if quota > 0:
+                bucket = 0
+            elif bool(item.get("image_quota_unknown")):
+                bucket = 1
+            else:
+                bucket = 2
+            return bucket, -quota, str(item.get("last_used_at") or "")
+
+        return [str(item.get("access_token") or "").strip() for item in sorted(candidates, key=score)]
 
     def _list_available_candidate_tokens(
             self,

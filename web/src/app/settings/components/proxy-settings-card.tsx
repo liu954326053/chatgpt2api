@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { testProxy, type ProxyTestResult } from "@/lib/api";
 
 import { useSettingsStore } from "../store";
@@ -34,10 +34,13 @@ export function ProxySettingsCard() {
     try {
       const data = await testProxy(candidate);
       setTestResult(data.result);
+      const total = Number(data.result.total || 1);
+      const passed = Number(data.result.passed ?? (data.result.ok ? total : 0));
+      const failed = Number(data.result.failed ?? (data.result.ok ? 0 : 1));
       if (data.result.ok) {
-        toast.success(`代理可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`);
+        toast.success(total > 1 ? `代理池可用：${passed}/${total} 通过` : `代理可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`);
       } else {
-        toast.error(`代理不可用：${data.result.error ?? "未知错误"}`);
+        toast.error(total > 1 ? `代理池部分不可用：${failed}/${total} 失败` : `代理不可用：${data.result.error ?? "未知错误"}`);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "测试代理失败");
@@ -56,11 +59,11 @@ export function ProxySettingsCard() {
             </div>
             <div>
               <h2 className="text-lg font-semibold tracking-tight">全局代理</h2>
-              <p className="text-sm text-stone-500">为系统中的出站请求配置统一代理，保存后会立即生效。</p>
+              <p className="text-sm text-stone-500">为系统中的出站请求配置代理池，保存后会立即生效。</p>
             </div>
           </div>
           <Badge variant={proxy.trim() ? "success" : "secondary"} className="w-fit rounded-md px-2.5 py-1">
-            {proxy.trim() ? "已配置" : "未配置"}
+            {proxy.trim() ? `${proxy.split(/\r?\n/).filter((item) => item.trim()).length} 个代理` : "未配置"}
           </Badge>
         </div>
 
@@ -71,18 +74,19 @@ export function ProxySettingsCard() {
         ) : (
           <>
             <div className="space-y-2">
-              <label className="text-sm font-medium text-stone-700">代理地址</label>
-              <Input
+              <label className="text-sm font-medium text-stone-700">代理池</label>
+              <Textarea
                 value={proxy}
                 onChange={(event) => {
                   setProxy(event.target.value);
                   setTestResult(null);
                 }}
-                placeholder="http://user:pass@127.0.0.1:7890"
-                className="h-11 rounded-xl border-stone-200 bg-white"
+                placeholder={`http://127.0.0.1:7890
+user:pass@proxy.example.com:1463`}
+                className="min-h-36 rounded-xl border-stone-200 bg-white font-mono text-xs"
               />
               <p className="text-sm text-stone-500">
-                留空表示不使用代理。请按完整地址填写，例如 `http://127.0.0.1:7890`、`http://用户名:密码@127.0.0.1:7890` 或 `socks5://127.0.0.1:7890`。
+                留空表示不使用代理。支持一行一个代理，未写协议时默认按 http:// 处理；出站请求会按代理池轮询使用。
               </p>
             </div>
 
@@ -94,9 +98,22 @@ export function ProxySettingsCard() {
                     : "border-rose-200 bg-rose-50 text-rose-800"
                 }`}
               >
-                {testResult.ok
-                  ? `代理可用：HTTP ${testResult.status}，用时 ${testResult.latency_ms} ms`
-                  : `代理不可用：${testResult.error ?? "未知错误"}（用时 ${testResult.latency_ms} ms）`}
+                <div>
+                  {Number(testResult.total || 1) > 1
+                    ? `代理池测试：${testResult.passed ?? 0}/${testResult.total} 通过，${testResult.failed ?? 0} 失败`
+                    : testResult.ok
+                      ? `代理可用：HTTP ${testResult.status}，用时 ${testResult.latency_ms} ms`
+                      : `代理不可用：${testResult.error ?? "未知错误"}（用时 ${testResult.latency_ms} ms）`}
+                </div>
+                {testResult.items?.length ? (
+                  <div className="mt-2 max-h-32 overflow-auto border-t border-current/10 pt-2 text-xs">
+                    {testResult.items.map((item, index) => (
+                      <div key={`${item.url || index}-${index}`} className="truncate">
+                        {index + 1}. {item.ok ? "✅" : "❌"} {item.url || "proxy"} {item.status ? `HTTP ${item.status}` : item.error || ""} · {item.latency_ms} ms
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

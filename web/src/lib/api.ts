@@ -870,11 +870,19 @@ export type ProxySettings = {
   url: string;
 };
 
-export type ProxyTestResult = {
+export type ProxyTestItem = {
   ok: boolean;
+  url?: string;
   status: number;
   latency_ms: number;
   error: string | null;
+};
+
+export type ProxyTestResult = ProxyTestItem & {
+  total?: number;
+  passed?: number;
+  failed?: number;
+  items?: ProxyTestItem[];
 };
 
 export async function fetchProxy() {

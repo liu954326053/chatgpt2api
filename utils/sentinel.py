@@ -88,9 +88,9 @@ class SentinelTokenGenerator:
 DEFAULT_SENTINEL_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/145.0.0.0 Safari/537.36"
+    "Chrome/142.0.0.0 Safari/537.36"
 )
-DEFAULT_SENTINEL_SEC_CH_UA = '"Chromium";v="145", "Google Chrome";v="145", "Not/A)Brand";v="99"'
+DEFAULT_SENTINEL_SEC_CH_UA = '"Google Chrome";v="142", "Not?A_Brand";v="8", "Chromium";v="142"'
 
 
 def build_sentinel_token(

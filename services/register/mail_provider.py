@@ -16,6 +16,7 @@ from curl_cffi import requests
 
 
 from services.config import DATA_DIR
+from services.proxy_service import proxy_settings
 
 DDG_ALIASES_FILE = DATA_DIR / "ddg_aliases.json"
 _ddg_aliases_lock = Lock()
@@ -61,6 +62,8 @@ domain_lock = Lock()
 provider_lock = Lock()
 domain_index = 0
 provider_index = 0
+disabled_domain_lock = Lock()
+disabled_mail_domains: set[str] = set()
 cloudmail_token_lock = Lock()
 cloudmail_token_cache: dict[str, tuple[str, float]] = {}
 
@@ -75,12 +78,369 @@ def _config(mail_config: dict) -> dict:
     }
 
 
+def _is_transient_network_error(error: Exception | str) -> bool:
+    value = str(error or "").lower()
+    return any(
+        token in value
+        for token in (
+            "timed out",
+            "timeout",
+            "operation timed out",
+            "connection reset",
+            "connection aborted",
+            "connection closed abruptly",
+            "temporarily unavailable",
+            "curl: (56)",
+        )
+    )
+
+
 def _random_mailbox_name() -> str:
     return f"{''.join(random.choices(string.ascii_lowercase, k=5))}{''.join(random.choices(string.digits, k=random.randint(1, 3)))}{''.join(random.choices(string.ascii_lowercase, k=random.randint(1, 3)))}"
 
 
+_vmail_adjectives = [
+    "admiring",
+    "adoring",
+    "agitated",
+    "amazing",
+    "angry",
+    "awesome",
+    "blissful",
+    "bold",
+    "brave",
+    "busy",
+    "charming",
+    "clever",
+    "cool",
+    "compassionate",
+    "competent",
+    "confident",
+    "dazzling",
+    "determined",
+    "dreamy",
+    "eager",
+    "ecstatic",
+    "elastic",
+    "elated",
+    "elegant",
+    "eloquent",
+    "epic",
+    "fervent",
+    "focused",
+    "friendly",
+    "frosty",
+    "funny",
+    "gallant",
+    "gifted",
+    "goofy",
+    "gracious",
+    "great",
+    "happy",
+    "hardcore",
+    "heuristic",
+    "hopeful",
+    "hungry",
+    "infallible",
+    "inspiring",
+    "interesting",
+    "intelligent",
+    "jolly",
+    "kind",
+    "laughing",
+    "loving",
+    "lucid",
+    "magical",
+    "modest",
+    "musing",
+    "naughty",
+    "nervous",
+    "nice",
+    "nifty",
+    "nostalgic",
+    "objective",
+    "optimistic",
+    "peaceful",
+    "pedantic",
+    "pensive",
+    "practical",
+    "quirky",
+    "recursing",
+    "relaxed",
+    "reverent",
+    "romantic",
+    "serene",
+    "sharp",
+    "silly",
+    "sleepy",
+    "stoic",
+    "stupefied",
+    "suspicious",
+    "sweet",
+    "tender",
+    "thirsty",
+    "trusting",
+    "unruffled",
+    "upbeat",
+    "vibrant",
+    "vigilant",
+    "vigorous",
+    "wizardly",
+    "wonderful",
+    "xenodochial",
+    "youthful",
+    "zealous",
+    "zen",
+]
+
+_vmail_names = [
+    "albattani",
+    "allen",
+    "almeida",
+    "antonelli",
+    "agnesi",
+    "archimedes",
+    "aryabhata",
+    "austin",
+    "babbage",
+    "banach",
+    "bardeen",
+    "bartik",
+    "bassi",
+    "beaver",
+    "bell",
+    "benz",
+    "bhabha",
+    "bhaskara",
+    "black",
+    "blackburn",
+    "blackwell",
+    "bohr",
+    "borg",
+    "bose",
+    "bouman",
+    "boyd",
+    "brahmagupta",
+    "brattain",
+    "brown",
+    "buck",
+    "burnell",
+    "cannon",
+    "carson",
+    "cartwright",
+    "cerf",
+    "chandrasekhar",
+    "clarke",
+    "colden",
+    "cori",
+    "cray",
+    "curie",
+    "darwin",
+    "davinci",
+    "dhawan",
+    "diffie",
+    "dijkstra",
+    "dirac",
+    "edison",
+    "einstein",
+    "elbakyan",
+    "elgamal",
+    "elion",
+    "ellis",
+    "engelbart",
+    "euclid",
+    "euler",
+    "faraday",
+    "fermat",
+    "fermi",
+    "feynman",
+    "franklin",
+    "gagarin",
+    "galileo",
+    "galois",
+    "ganguly",
+    "gates",
+    "gauss",
+    "germain",
+    "goldberg",
+    "goldstine",
+    "goldwasser",
+    "goodall",
+    "gould",
+    "greider",
+    "hamilton",
+    "hawking",
+    "heisenberg",
+    "hermann",
+    "herschel",
+    "hertz",
+    "hodgkin",
+    "hofstadter",
+    "hopper",
+    "hugle",
+    "hypatia",
+    "ishizaka",
+    "jackson",
+    "jang",
+    "jemison",
+    "jennings",
+    "johnson",
+    "joliot",
+    "jones",
+    "kalam",
+    "kapitsa",
+    "kare",
+    "keldysh",
+    "keller",
+    "kepler",
+    "khayyam",
+    "khorana",
+    "kilby",
+    "kirch",
+    "knuth",
+    "kowalevski",
+    "lamarr",
+    "lamport",
+    "leakey",
+    "liskov",
+    "lovelace",
+    "mahavira",
+    "margulis",
+    "matsumoto",
+    "maxwell",
+    "mayer",
+    "mccarthy",
+    "mcclintock",
+    "mclean",
+    "mcnulty",
+    "meitner",
+    "mendel",
+    "mendeleev",
+    "merkle",
+    "mirzakhani",
+    "montalcini",
+    "moore",
+    "morse",
+    "murdock",
+    "nash",
+    "neumann",
+    "newton",
+    "nightingale",
+    "nobel",
+    "noether",
+    "noyce",
+    "panini",
+    "pascal",
+    "pasteur",
+    "payne",
+    "perlman",
+    "pike",
+    "poincare",
+    "ptolemy",
+    "raman",
+    "ramanujan",
+    "ride",
+    "ritchie",
+    "robinson",
+    "roentgen",
+    "rosalind",
+    "rubin",
+    "saha",
+    "sammet",
+    "satoshi",
+    "shamir",
+    "shannon",
+    "shaw",
+    "shirley",
+    "shockley",
+    "sinoussi",
+    "snyder",
+    "solomon",
+    "spence",
+    "stonebraker",
+    "sutherland",
+    "swanson",
+    "swartz",
+    "swirles",
+    "taussig",
+    "tereshkova",
+    "tesla",
+    "tharp",
+    "thompson",
+    "torvalds",
+    "tu",
+    "turing",
+    "varahamihira",
+    "vaughan",
+    "visvesvaraya",
+    "volhard",
+    "villani",
+    "wilbur",
+    "wiles",
+    "williams",
+    "wilson",
+    "wing",
+    "wozniak",
+    "wright",
+    "wu",
+    "yalow",
+    "yonath",
+    "zhukovsky",
+]
+
+_vmail_default_domains = [
+    "asdsda.dpdns.org",
+    "csq.qzz.io",
+    "gfgkyj.dpdns.org",
+    "jhdsdc.dpdns.org",
+    "magiccsq.dpdns.org",
+    "qazweds.dpdns.org",
+    "qwerfdcv.dpdns.org",
+    "qwexgd.dpdns.org",
+    "sdfhgdf.dpdns.org",
+    "wretgfd.dpdns.org",
+    "mengjun.christmas",
+    "mengjun.space",
+    "mengjun.buzz",
+    "mengjun.cyou",
+    "anhao.buzz",
+    "anhao.click",
+    "anhao.lat",
+    "mengjun.asia",
+    "anhao.space",
+    "anhao.store",
+]
+
+
+def _random_vmail_local_part() -> str:
+    separator = random.choice(string.ascii_lowercase + ".")
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=random.randint(8, 10)))
+    local_part = f"{random.choice(_vmail_adjectives)}{separator}{random.choice(_vmail_names)}{suffix}"
+    if local_part == "boring-wozniak":
+        return _random_mailbox_name()
+    return local_part.replace("..", ".").strip(".") or _random_mailbox_name()
+
+
 def _random_subdomain_label() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=random.randint(4, 10)))
+
+
+def disable_domain(domain: str) -> None:
+    value = str(domain or "").strip().lower()
+    if not value:
+        return
+    with disabled_domain_lock:
+        disabled_mail_domains.add(value)
+
+
+def get_disabled_domains() -> set[str]:
+    with disabled_domain_lock:
+        return set(disabled_mail_domains)
+
+
+def _filter_enabled_domains(domains: list[str]) -> list[str]:
+    disabled = get_disabled_domains()
+    return [str(item).strip() for item in domains if str(item).strip() and str(item).strip().lower() not in disabled]
 
 
 def _next_domain(domains: list[str]) -> str:
@@ -105,9 +465,7 @@ def _normalize_string_list(value: Any) -> list[str]:
 
 def _create_session(conf: dict):
     proxy = str(conf.get("proxy") or "").strip()
-    kwargs = {"impersonate": "chrome", "verify": False}
-    if proxy:
-        kwargs["proxy"] = proxy
+    kwargs = proxy_settings.build_session_kwargs(proxy=proxy, impersonate="chrome", verify=False)
     return requests.Session(**kwargs)
 
 
@@ -227,13 +585,24 @@ class BaseMailProvider:
 
     def wait_for(self, mailbox: dict[str, Any], on_message: Callable[[dict[str, Any]], ResultT | None]) -> ResultT | None:
         deadline = time.monotonic() + self.conf["wait_timeout"]
+        last_error: Exception | None = None
         while time.monotonic() < deadline:
-            message = self.fetch_latest_message(mailbox)
+            try:
+                message = self.fetch_latest_message(mailbox)
+                last_error = None
+            except Exception as error:
+                if not _is_transient_network_error(error):
+                    raise
+                last_error = error
+                time.sleep(max(0.2, self.conf["wait_interval"]))
+                continue
             if message:
                 result = on_message(message)
                 if result is not None:
                     return result
             time.sleep(max(0.2, self.conf["wait_interval"]))
+        if last_error is not None:
+            mailbox["_last_wait_error"] = str(last_error)
         return None
 
     def wait_for_code(self, mailbox: dict[str, Any]) -> str | None:
@@ -852,6 +1221,133 @@ class InbucketMailProvider(BaseMailProvider):
         self.session.close()
 
 
+class VmailProvider(BaseMailProvider):
+    name = "vmail"
+
+    def __init__(self, entry: dict, conf: dict):
+        super().__init__(conf, str(entry.get("provider_ref") or ""))
+        self.api_base = str(entry.get("api_base") or "https://vmail.liu954326053.workers.dev").rstrip("/")
+        raw_domains = entry.get("domain") or []
+        self.domain = _normalize_string_list(raw_domains)
+        self.exclude_domains = {str(item).strip().lower() for item in (entry.get("exclude_domains") or entry.get("exclude_domain") or []) if str(item).strip()}
+        for domain in self.exclude_domains:
+            disable_domain(domain)
+        self.auto_load_domains = bool(entry.get("auto_load_domains", True))
+        self.session = _create_session(conf)
+        self.session.headers.update(
+            {
+                "User-Agent": conf["user_agent"],
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": self.api_base,
+                "Referer": f"{self.api_base}/",
+            }
+        )
+        if self.auto_load_domains or not self.domain:
+            self.domain = self._load_domains() or self.domain
+        if not self.domain:
+            self.domain = list(_vmail_default_domains)
+
+    def _request(self, method: str, path: str, payload: dict | None = None, expected: tuple[int, ...] = (200,)):
+        resp = self.session.request(
+            method.upper(),
+            f"{self.api_base}{path}",
+            json=payload,
+            timeout=self.conf["request_timeout"],
+            verify=False,
+        )
+        if resp.status_code not in expected:
+            raise RuntimeError(f"Vmail 请求失败: {method} {path}, HTTP {resp.status_code}, body={resp.text[:300]}")
+        if resp.status_code == 204:
+            return {}
+        try:
+            return resp.json()
+        except Exception as error:
+            raise RuntimeError(f"Vmail {method} {path} 返回非 JSON: {error}") from error
+
+    def _load_domains(self) -> list[str]:
+        try:
+            data = self._request("GET", "/config")
+        except Exception:
+            return []
+        domains = data.get("emailDomain") if isinstance(data, dict) else []
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in domains or []:
+            domain = str(item).strip().lower()
+            if domain and domain not in seen:
+                seen.add(domain)
+                result.append(domain)
+        return result
+
+    def create_mailbox(self, username: str | None = None) -> dict[str, Any]:
+        domains = _filter_enabled_domains(self.domain)
+        domain = random.choice(domains) if domains else ""
+        if not domain:
+            raise RuntimeError("Vmail 未能获取可用邮箱后缀")
+        local_part = str(username or "").strip() or _random_vmail_local_part()
+        address = f"{local_part}@{domain}"
+        return {"provider": self.name, "provider_ref": self.provider_ref, "address": address}
+
+    @staticmethod
+    def _items(data: Any) -> list[dict[str, Any]]:
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("emails", "messages", "data", "items", "results"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _normalize_message(item: dict[str, Any], address: str) -> dict[str, Any]:
+        sender = item.get("from") or item.get("sender") or item.get("messageFrom") or ""
+        if isinstance(sender, dict):
+            sender = sender.get("address") or sender.get("email") or sender.get("name") or ""
+        text_content, html_content = _extract_content(item)
+        return {
+            "provider": VmailProvider.name,
+            "mailbox": address,
+            "message_id": str(item.get("id") or item.get("_id") or item.get("messageId") or ""),
+            "subject": str(item.get("subject") or ""),
+            "sender": str(sender),
+            "text_content": text_content,
+            "html_content": html_content,
+            "received_at": _parse_received_at(item.get("date") or item.get("createdAt") or item.get("created_at") or item.get("receivedAt") or item.get("timestamp")),
+            "to": item.get("to") or item.get("mailTo") or item.get("receiver") or address,
+            "raw": item,
+        }
+
+    def fetch_latest_message(self, mailbox: dict[str, Any]) -> dict[str, Any] | None:
+        address = str(mailbox.get("address") or "").strip()
+        if not address:
+            raise RuntimeError("Vmail 缺少 address")
+        data = self._request("POST", "/api/emails", payload={"address": address})
+        messages = [item for item in self._items(data) if _message_matches_email(item, address)]
+        if not messages:
+            return None
+        item = max(
+            messages,
+            key=lambda value: (
+                (_parse_received_at(value.get("date") or value.get("createdAt") or value.get("created_at") or value.get("receivedAt") or value.get("timestamp")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(),
+                str(value.get("id") or value.get("_id") or value.get("messageId") or ""),
+            ),
+        )
+        message_id = str(item.get("id") or item.get("_id") or item.get("messageId") or "").strip()
+        if message_id:
+            try:
+                detail = self._request("GET", f"/api/emails/{message_id}")
+                if isinstance(detail, dict):
+                    item = detail
+            except Exception:
+                pass
+        return self._normalize_message(item, address)
+
+    def close(self) -> None:
+        self.session.close()
+
+
 class YydsMailProvider(BaseMailProvider):
     name = "yyds_mail"
 
@@ -964,6 +1460,8 @@ def _create_provider(mail_config: dict, provider: str = "", provider_ref: str = 
         return MoEmailProvider(entry, conf)
     if entry["type"] == "inbucket":
         return InbucketMailProvider(entry, conf)
+    if entry["type"] == "vmail":
+        return VmailProvider(entry, conf)
     if entry["type"] == "yyds_mail":
         return YydsMailProvider(entry, conf)
     raise RuntimeError(f"不支持的 mail.provider: {entry['type']}")

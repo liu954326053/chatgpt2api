@@ -56,10 +56,13 @@ export function ConfigCard() {
     try {
       const data = await testProxy(candidate);
       setProxyTestResult(data.result);
+      const total = Number(data.result.total || 1);
+      const passed = Number(data.result.passed ?? (data.result.ok ? total : 0));
+      const failed = Number(data.result.failed ?? (data.result.ok ? 0 : 1));
       if (data.result.ok) {
-        toast.success(`代理可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`);
+        toast.success(total > 1 ? `代理池可用：${passed}/${total} 通过` : `代理可用（${data.result.latency_ms} ms，HTTP ${data.result.status}）`);
       } else {
-        toast.error(`代理不可用：${data.result.error ?? "未知错误"}`);
+        toast.error(total > 1 ? `代理池部分不可用：${failed}/${total} 失败` : `代理不可用：${data.result.error ?? "未知错误"}`);
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "测试代理失败");
@@ -96,28 +99,42 @@ export function ConfigCard() {
             <p className="text-xs text-stone-500">单位分钟，控制账号自动刷新频率。</p>
           </div>
           <div className="space-y-2">
-            <label className="text-sm text-stone-700">全局代理</label>
-            <Input
+            <label className="text-sm text-stone-700">全局代理池</label>
+            <Textarea
               value={String(config?.proxy || "")}
               onChange={(event) => {
                 setProxy(event.target.value);
                 setProxyTestResult(null);
               }}
-              placeholder="http://127.0.0.1:7890"
-              className="h-10 rounded-xl border-stone-200 bg-white"
+              placeholder={`http://127.0.0.1:7890
+user:pass@proxy.example.com:1463`}
+              className="min-h-28 rounded-xl border-stone-200 bg-white font-mono text-xs"
             />
-            <p className="text-xs text-stone-500">留空表示不使用代理。</p>
+            <p className="text-xs text-stone-500">留空表示不使用代理。支持一行一个代理，未写协议时默认按 http:// 处理；出站请求会按代理池轮询使用。</p>
             {proxyTestResult ? (
               <div
-                className={`rounded-xl border px-3 py-2 text-xs leading-6 ${
+                className={`space-y-1 rounded-xl border px-3 py-2 text-xs leading-6 ${
                   proxyTestResult.ok
                     ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                     : "border-rose-200 bg-rose-50 text-rose-800"
                 }`}
               >
-                {proxyTestResult.ok
-                  ? `代理可用：HTTP ${proxyTestResult.status}，用时 ${proxyTestResult.latency_ms} ms`
-                  : `代理不可用：${proxyTestResult.error ?? "未知错误"}（用时 ${proxyTestResult.latency_ms} ms）`}
+                <div>
+                  {Number(proxyTestResult.total || 1) > 1
+                    ? `代理池测试：${proxyTestResult.passed ?? 0}/${proxyTestResult.total} 通过，${proxyTestResult.failed ?? 0} 失败`
+                    : proxyTestResult.ok
+                      ? `代理可用：HTTP ${proxyTestResult.status}，用时 ${proxyTestResult.latency_ms} ms`
+                      : `代理不可用：${proxyTestResult.error ?? "未知错误"}（用时 ${proxyTestResult.latency_ms} ms）`}
+                </div>
+                {proxyTestResult.items?.length ? (
+                  <div className="max-h-28 overflow-auto border-t border-current/10 pt-1">
+                    {proxyTestResult.items.map((item, index) => (
+                      <div key={`${item.url || index}-${index}`} className="truncate">
+                        {index + 1}. {item.ok ? "✅" : "❌"} {item.url || "proxy"} {item.status ? `HTTP ${item.status}` : item.error || ""} · {item.latency_ms} ms
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             <div className="flex justify-end">

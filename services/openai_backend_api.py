@@ -241,8 +241,29 @@ class OpenAIBackendAPI:
 
     @staticmethod
     def _extract_quota_and_restore_at(limits_progress: list[Any]) -> tuple[int, str | None, bool]:
+        image_feature_names = {
+            "image_gen",
+            "image_generation",
+            "gpt_image",
+            "gpt-image",
+            "gpt_image_2",
+            "gpt-image-2",
+            "image2",
+            "picture_v2",
+        }
         for item in limits_progress:
-            if isinstance(item, dict) and item.get("feature_name") == "image_gen":
+            if not isinstance(item, dict):
+                continue
+            feature_name = str(
+                item.get("feature_name")
+                or item.get("name")
+                or item.get("key")
+                or item.get("feature")
+                or ""
+            ).strip().lower()
+            if feature_name in image_feature_names or (
+                ("image" in feature_name or "picture" in feature_name) and "upload" not in feature_name
+            ):
                 return int(item.get("remaining") or 0), str(item.get("reset_after") or "") or None, False
         return 0, None, True
 
