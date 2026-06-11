@@ -10,7 +10,8 @@ import time
 from services.storage.base import StorageBackend
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
+_DATA_DIR_ENV = os.getenv("CHATGPT2API_DATA_DIR", "").strip()
+DATA_DIR = Path(_DATA_DIR_ENV).expanduser() if _DATA_DIR_ENV else BASE_DIR / "data"
 CONFIG_FILE = BASE_DIR / "config.json"
 VERSION_FILE = BASE_DIR / "VERSION"
 BACKUP_STATE_FILE = DATA_DIR / "backup_state.json"
@@ -251,7 +252,13 @@ class ConfigStore:
 
     @property
     def accounts_file(self) -> Path:
-        return DATA_DIR / "accounts.json"
+        value = os.getenv("CHATGPT2API_ACCOUNTS_PATH", "").strip()
+        if not value:
+            return DATA_DIR / "accounts.json"
+        path = Path(value).expanduser()
+        if path.suffix.lower() != ".json":
+            path = path / "accounts.json"
+        return path
 
     @property
     def refresh_account_interval_minute(self) -> int:

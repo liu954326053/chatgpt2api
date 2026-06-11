@@ -15,6 +15,7 @@ def create_storage_backend(data_dir: Path) -> StorageBackend:
     
     环境变量：
     - STORAGE_BACKEND: json|sqlite|postgres|git (默认 json)
+    - CHATGPT2API_ACCOUNTS_PATH: JSON 账号文件路径或目录 (仅 json 后端)
     - DATABASE_URL: 数据库连接字符串 (用于 sqlite/postgres)
     - GIT_REPO_URL: Git 仓库地址 (用于 git)
     - GIT_TOKEN: Git 访问令牌 (用于 git)
@@ -27,8 +28,10 @@ def create_storage_backend(data_dir: Path) -> StorageBackend:
     
     if backend_type == "json":
         # 本地 JSON 文件存储
-        file_path = data_dir / "accounts.json"
-        auth_keys_path = data_dir / "auth_keys.json"
+        from services.config import config
+
+        file_path = config.accounts_file
+        auth_keys_path = file_path.with_name("auth_keys.json")
         print(f"[storage] Using JSON storage: {file_path}")
         return JSONStorageBackend(file_path, auth_keys_path)
     

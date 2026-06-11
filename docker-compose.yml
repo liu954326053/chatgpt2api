@@ -10,7 +10,9 @@ services:
       - ./config.json:/app/config.json
     environment:
       # 存储后端配置 (可选值: json, sqlite, postgres, git)
-       - STORAGE_BACKEND=json
+      - STORAGE_BACKEND=json
+      # JSON 账号持久化路径：该路径位于 ./data volume 内，容器重建后账号不会丢失
+      - CHATGPT2API_ACCOUNTS_PATH=/app/data/accounts.json
       
       # 数据库配置 (当 STORAGE_BACKEND=sqlite/postgres 时使用)
       # - DATABASE_URL=postgresql://user:password@host:5432/dbname

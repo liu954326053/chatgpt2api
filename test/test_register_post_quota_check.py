@@ -8,12 +8,22 @@ os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 from services.register import openai_register
 
 
+class FakeLease:
+    def __init__(self, proxy: str) -> None:
+        self.proxy = proxy
+        self.released = False
+
+    def release(self) -> None:
+        self.released = True
+
+
 class FakeRegistrar:
     instances: list["FakeRegistrar"] = []
 
     def __init__(self, proxy: str) -> None:
         self.proxy = proxy
         self.closed = False
+        self.proxy_lease = FakeLease("http://proxy.example.com:8080")
         FakeRegistrar.instances.append(self)
 
     def register(self, index: int) -> dict:
@@ -29,6 +39,9 @@ class FakeRegistrar:
 
     def close(self) -> None:
         self.closed = True
+        if self.proxy_lease is not None:
+            self.proxy_lease.release()
+            self.proxy_lease = None
 
 
 class FakeAccountService:
@@ -87,6 +100,7 @@ def test_worker_detects_and_saves_quota_after_registration(monkeypatch) -> None:
     assert response["result"]["image_quota_unknown"] is False
     assert response["result"]["type"] == "Plus"
     assert FakeRegistrar.instances[-1].closed is True
+    assert FakeRegistrar.instances[-1].proxy_lease is None
 
 
 def test_worker_keeps_registration_success_when_quota_check_fails(monkeypatch) -> None:

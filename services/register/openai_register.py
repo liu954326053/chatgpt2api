@@ -19,7 +19,7 @@ from curl_cffi import requests
 
 from services.account_service import account_service
 from services.register import mail_provider
-from services.proxy_service import proxy_settings
+from services.proxy_service import ProxyLease, proxy_settings
 
 base_dir = Path(__file__).resolve().parent
 config = {
@@ -293,11 +293,23 @@ def build_sentinel_token(session: requests.Session, device_id: str, flow: str) -
     raise RuntimeError(last_error or "sentinel_token_failed")
 
 
-def create_session(proxy: str = "") -> Any:
-    kwargs = proxy_settings.build_session_kwargs(proxy=proxy, impersonate="chrome142", verify=False)
+def create_session(proxy: str = "", selected_proxy: str | None = None) -> Any:
+    if selected_proxy is not None:
+        kwargs = {"impersonate": "chrome142", "verify": False}
+        if selected_proxy:
+            kwargs["proxy"] = selected_proxy
+    else:
+        kwargs = proxy_settings.build_session_kwargs(proxy=proxy, impersonate="chrome142", verify=False)
     session = requests.Session(**kwargs)
     setattr(session, "_selected_proxy", str(kwargs.get("proxy") or ""))
     return session
+
+
+def _acquire_registration_proxy(proxy: str, index: int) -> ProxyLease:
+    return proxy_settings.acquire_registration_proxy(
+        proxy,
+        on_wait=lambda total: step(index, f"注册代理池 {total} 个代理均在使用中，等待空闲代理", "yellow"),
+    )
 
 
 def request_with_local_retry(session: requests.Session, method: str, url: str, retry_attempts: int = 3, **kwargs):
@@ -328,6 +340,27 @@ def _proxy_key(session: requests.Session) -> str:
     return str(getattr(session, "_selected_proxy", "") or "direct")
 
 
+def _proxy_label(session: requests.Session) -> str:
+    proxy = _proxy_key(session)
+    if proxy == "direct":
+        return proxy
+    try:
+        parsed = urlparse(proxy)
+        if not parsed.username and not parsed.password:
+            return proxy
+        auth = parsed.username or ""
+        if len(auth) > 8:
+            auth = auth[:8] + "…"
+        if parsed.password:
+            auth += ":****"
+        host = parsed.hostname or ""
+        if parsed.port:
+            host += f":{parsed.port}"
+        return parsed._replace(netloc=f"{auth}@{host}").geturl()
+    except Exception:
+        return proxy
+
+
 def _proxy_flow_lock(session: requests.Session) -> threading.RLock:
     proxy = _proxy_key(session)
     with proxy_flow_locks_guard:
@@ -343,7 +376,7 @@ def _wait_proxy_cooldown(session: requests.Session, index: int) -> None:
     with proxy_cooldown_lock:
         wait_for = max(0.0, proxy_cooldown_until.get(proxy, 0.0) - time.monotonic())
     if wait_for > 0:
-        step(index, f"代理 {proxy} 正在 Cloudflare 冷却，等待 {wait_for:.1f}s", "yellow")
+        step(index, f"代理 {_proxy_label(session)} 正在 Cloudflare 冷却，等待 {wait_for:.1f}s", "yellow")
         time.sleep(wait_for + random.uniform(0.5, 2.0))
 
 
@@ -355,7 +388,7 @@ def _mark_proxy_cloudflare(session: requests.Session, index: int, stage: str) ->
         cooldown = min(300.0, 35.0 * count + random.uniform(5.0, 15.0))
         until = time.monotonic() + cooldown
         proxy_cooldown_until[proxy] = max(proxy_cooldown_until.get(proxy, 0.0), until)
-    step(index, f"{stage} 触发 Cloudflare，代理 {proxy} 冷却 {cooldown:.1f}s", "yellow")
+    step(index, f"{stage} 触发 Cloudflare，代理 {_proxy_label(session)} 冷却 {cooldown:.1f}s", "yellow")
 
 
 def _mark_proxy_success(session: requests.Session) -> None:
@@ -370,7 +403,7 @@ def _serialized_proxy_flow(session: requests.Session, index: int):
     lock = _proxy_flow_lock(session)
     acquired_immediately = lock.acquire(blocking=False)
     if not acquired_immediately:
-        step(index, f"同代理 {_proxy_key(session)} 已有注册链路在运行，等待代理闸门", "yellow")
+        step(index, f"同代理 {_proxy_label(session)} 已有注册链路在运行，等待代理闸门", "yellow")
         lock.acquire()
     try:
         if not acquired_immediately:
@@ -451,7 +484,8 @@ def request_platform_oauth_token(session: requests.Session, code: str, code_veri
 class PlatformRegistrar:
     def __init__(self, proxy: str = "") -> None:
         self.proxy = proxy
-        self.session = create_session(proxy)
+        self.proxy_lease: ProxyLease | None = None
+        self.session = create_session("", selected_proxy="")
         self.device_id = str(uuid.uuid4())
         self.current_email = ""
         self.code_verifier = ""
@@ -459,13 +493,17 @@ class PlatformRegistrar:
 
     def close(self) -> None:
         self.session.close()
+        if self.proxy_lease is not None:
+            self.proxy_lease.release()
+            self.proxy_lease = None
 
     def _reset_flow_session(self) -> None:
         try:
             self.session.close()
         except Exception:
             pass
-        self.session = create_session(self.proxy)
+        selected_proxy = self.proxy_lease.proxy if self.proxy_lease is not None else str(getattr(self.session, "_selected_proxy", "") or "")
+        self.session = create_session(self.proxy, selected_proxy=selected_proxy)
         self.device_id = str(uuid.uuid4())
         self.current_email = ""
         self.code_verifier = ""
@@ -789,6 +827,11 @@ class PlatformRegistrar:
         }
 
     def register(self, index: int) -> dict:
+        if self.proxy_lease is None:
+            self.proxy_lease = _acquire_registration_proxy(self.proxy, index)
+            self.session.close()
+            self.session = create_session(self.proxy, selected_proxy=self.proxy_lease.proxy)
+            step(index, f"注册链路使用代理: {_proxy_label(self.session)}")
         last_error = ""
         for mailbox_attempt in range(1, 4):
             try:

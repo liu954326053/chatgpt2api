@@ -31,7 +31,7 @@ docker compose up -d
 
 - Web 面板：`http://localhost:3000`
 - API 地址：`http://localhost:3000/v1`
-- 数据目录：`./data`
+- 数据目录：`./data`，默认已挂载到容器 `/app/data`，账号文件默认保存在 `/app/data/accounts.json`
 
 ### 本地开发
 
@@ -69,6 +69,18 @@ docker-compose up -d
 - `sqlite` - 本地 SQLite 数据库
 - `postgres` - 外部 PostgreSQL（需配置 `DATABASE_URL`）
 - `git` - Git 私有仓库（需配置 `GIT_REPO_URL` 和 `GIT_TOKEN`）
+
+JSON 本地文件默认保存到 `data/accounts.json`。Docker 部署时请保持 `./data:/app/data` volume 挂载，容器重建后账号不会丢失；也可以用环境变量显式指定账号文件：
+
+```yaml
+volumes:
+  - ./data:/app/data
+environment:
+  - STORAGE_BACKEND=json
+  - CHATGPT2API_ACCOUNTS_PATH=/app/data/accounts.json
+```
+
+`CHATGPT2API_ACCOUNTS_PATH` 可以填写具体 `.json` 文件，也可以填写目录；填写目录时会自动使用 `<目录>/accounts.json`。如果需要整体迁移数据目录，可设置 `CHATGPT2API_DATA_DIR=/app/data`。
 
 示例：使用 PostgreSQL
 

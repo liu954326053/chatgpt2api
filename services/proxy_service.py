@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from threading import Lock
+from threading import Condition, Lock
 from urllib.parse import urlparse
 
 from curl_cffi.requests import Session
@@ -12,12 +12,36 @@ from curl_cffi.requests import Session
 from services.config import DATA_DIR, config
 
 
+class ProxyLease:
+    """A leased proxy slot from a proxy pool."""
+
+    def __init__(self, store: "ProxySettingsStore", pool_key: str, proxy: str) -> None:
+        self._store = store
+        self._pool_key = pool_key
+        self.proxy = proxy
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._store.release_proxy(self)
+
+    def __enter__(self) -> "ProxyLease":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.release()
+
+
 class ProxySettingsStore:
     """Resolve global/account proxy settings and rotate proxy pools safely."""
 
     def __init__(self) -> None:
         self._lock = Lock()
+        self._condition = Condition(self._lock)
         self._pool_indexes: dict[str, int] = {}
+        self._busy_proxies: dict[str, set[str]] = {}
 
     def select_proxy(self, value: object = "") -> str:
         """Return one normalized proxy URL from a proxy value/pool using round-robin."""
@@ -26,12 +50,82 @@ class ProxySettingsStore:
             return ""
         if len(pool) == 1:
             return pool[0]
-        key = "\n".join(pool)
+        key = "select\n" + "\n".join(pool)
         with self._lock:
             index = self._pool_indexes.get(key, 0)
             selected = pool[index % len(pool)]
             self._pool_indexes[key] = (index + 1) % len(pool)
             return selected
+
+    def acquire_proxy(
+        self,
+        value: object = "",
+        *,
+        scope: str = "default",
+        wait: bool = True,
+        timeout: float | None = None,
+        on_wait=None,
+    ) -> ProxyLease:
+        """Lease one idle proxy from a pool.
+
+        Unlike select_proxy(), a leased proxy is marked busy until release_proxy()
+        is called, so concurrent long-running flows (registration) do not receive
+        the same proxy at the same time.
+        """
+        pool = parse_proxy_pool(value)
+        if not pool:
+            return ProxyLease(self, "", "")
+        key = f"lease:{scope}\n" + "\n".join(pool)
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        wait_notified = False
+        with self._condition:
+            while True:
+                busy = self._busy_proxies.setdefault(key, set())
+                if len(busy) < len(pool):
+                    start_index = self._pool_indexes.get(key, 0)
+                    for offset in range(len(pool)):
+                        index = (start_index + offset) % len(pool)
+                        selected = pool[index]
+                        if selected in busy:
+                            continue
+                        busy.add(selected)
+                        self._pool_indexes[key] = (index + 1) % len(pool)
+                        return ProxyLease(self, key, selected)
+                if not wait:
+                    raise TimeoutError("proxy pool exhausted")
+                if not wait_notified and on_wait:
+                    try:
+                        on_wait(len(pool))
+                    except Exception:
+                        pass
+                    wait_notified = True
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("proxy pool acquire timeout")
+                self._condition.wait(remaining)
+
+    def acquire_registration_proxy(self, register_proxy: object = "", **kwargs) -> ProxyLease:
+        """Lease a proxy for registration.
+
+        Registration proxy takes precedence. When it is empty, fall back to the
+        global proxy pool. If both are empty, return a direct/no-proxy lease.
+        """
+        proxy_value = str(register_proxy or "").strip() or config.get_proxy_settings()
+        return self.acquire_proxy(proxy_value, scope="register", **kwargs)
+
+    def release_proxy(self, lease: ProxyLease | None) -> None:
+        if lease is None or not lease._pool_key or not lease.proxy:
+            return
+        with self._condition:
+            busy = self._busy_proxies.get(lease._pool_key)
+            if busy is not None:
+                busy.discard(lease.proxy)
+                if not busy:
+                    self._busy_proxies.pop(lease._pool_key, None)
+            self._condition.notify()
 
     def build_session_kwargs(self, account: dict | None = None, proxy: str = "", **session_kwargs) -> dict[str, object]:
         account_proxy = str((account or {}).get("proxy") or "").strip()
