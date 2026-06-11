@@ -805,6 +805,60 @@ class PlatformRegistrar:
         raise RuntimeError(last_error or "mailbox_retry_failed")
 
 
+_REGISTER_QUOTA_RESULT_KEYS = (
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "email",
+    "user_id",
+    "type",
+    "status",
+    "quota",
+    "image_quota_unknown",
+    "limits_progress",
+    "default_model_slug",
+    "restore_at",
+    "source_type",
+    "proxy",
+)
+
+
+def _mark_registered_quota_unknown(access_token: str) -> None:
+    account_service.update_account(
+        access_token,
+        {"status": "正常", "quota": 0, "image_quota_unknown": True},
+        quiet=True,
+    )
+
+
+def _detect_registered_account_quota(index: int, access_token: str, result: dict) -> dict:
+    """注册完成后立即检测一次远端 image2 额度，并写回账号池。"""
+    try:
+        step(index, "注册成功，开始检测 image2 额度")
+        account = account_service.fetch_remote_info(access_token, "register_post_quota_check")
+    except Exception as error:
+        _mark_registered_quota_unknown(access_token)
+        step(index, f"image2 额度检测失败，已保留未知额度: {str(error)[:200]}", "yellow")
+        return result
+
+    if not account:
+        _mark_registered_quota_unknown(access_token)
+        step(index, "image2 额度检测未返回结果，已保留未知额度", "yellow")
+        return result
+
+    quota = max(0, int(account.get("quota") or 0))
+    image_quota_unknown = bool(account.get("image_quota_unknown"))
+    if image_quota_unknown:
+        step(index, "image2 额度检测完成：未知", "yellow")
+    else:
+        step(index, f"image2 额度检测完成：{quota}", "green" if quota > 0 else "yellow")
+
+    for key in _REGISTER_QUOTA_RESULT_KEYS:
+        if key in account and account.get(key) is not None:
+            result[key] = account.get(key)
+    return result
+
+
 def worker(index: int) -> dict:
     start = time.time()
     registrar = PlatformRegistrar(config["proxy"])
@@ -813,12 +867,11 @@ def worker(index: int) -> dict:
         result = registrar.register(index)
         cost = time.time() - start
         access_token = str(result["access_token"])
+        result.setdefault("status", "正常")
+        result.setdefault("quota", 0)
+        result.setdefault("image_quota_unknown", True)
         account_service.add_account_items([result])
-        account_service.update_account(
-            access_token,
-            {"status": "正常", "quota": 0, "image_quota_unknown": True},
-            quiet=True,
-        )
+        result = _detect_registered_account_quota(index, access_token, result)
         with stats_lock:
             stats["done"] += 1
             stats["success"] += 1
