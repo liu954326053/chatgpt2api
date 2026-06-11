@@ -56,6 +56,7 @@ export function RegisterCard() {
       ...(type === "gptmail" ? { api_key: "", default_domain: "" } : {}),
       ...(type === "yyds_mail" ? { api_base: "https://maliapi.215.im/v1", api_key: "", domain: [], subdomain: "", wildcard: false } : {}),
       ...(type === "ddg_mail" ? { ddg_token: "", cf_inbox_jwt: "", cf_domain: [], admin_password: "" } : {}),
+      ...(type === "vmail" ? { api_base: "https://vmail.liu954326053.workers.dev", domain: [], auto_load_domains: true, exclude_domains: [] } : {}),
     });
   };
 
@@ -149,6 +150,7 @@ export function RegisterCard() {
                 const type = String(provider.type || "tempmail_lol");
                 const domains = Array.isArray(provider.domain) ? provider.domain.map(String).join("\n") : "";
                 const subdomains = Array.isArray(provider.subdomain) ? provider.subdomain.map(String).join("\n") : "";
+                const excludeDomains = Array.isArray(provider.exclude_domains) ? provider.exclude_domains.map(String).join("\n") : "";
                 return (
                   <div key={index} className="space-y-3 border-t border-stone-200 pt-3 first:border-t-0 first:pt-0">
                     <div className="flex items-center justify-between gap-3">
@@ -178,14 +180,15 @@ export function RegisterCard() {
                             <SelectItem value="gptmail">gptmail(未测试)</SelectItem>
                             <SelectItem value="yyds_mail">yyds_mail</SelectItem>
                             <SelectItem value="ddg_mail">ddg_mail (DDG邮箱+CF中转)</SelectItem>
+                            <SelectItem value="vmail">vmail</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
-                      {type === "cloudmail_gen" || type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" || type === "ddg_mail" ? (
+                      {type === "cloudmail_gen" || type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" || type === "ddg_mail" || type === "vmail" ? (
                         <>
                           <div className="space-y-2">
-                            <label className="text-sm text-stone-700">{type === "cloudmail_gen" ? "CloudMail URL" : "API Base"}</label>
-                            <Input value={String(provider.api_base || "")} onChange={(event) => updateProvider(index, { api_base: event.target.value })} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
+                            <label className="text-sm text-stone-700">{type === "cloudmail_gen" ? "CloudMail URL" : type === "vmail" ? "Vmail API Base" : "API Base"}</label>
+                            <Input value={String(provider.api_base || "")} onChange={(event) => updateProvider(index, { api_base: event.target.value })} placeholder={type === "vmail" ? "https://vmail.liu954326053.workers.dev" : ""} className="h-10 rounded-xl border-stone-200 bg-white" disabled={config.enabled} />
                           </div>
                           {type === "cloudmail_gen" ? (
                             <>
@@ -234,6 +237,12 @@ export function RegisterCard() {
                           启用随机子域名
                         </label>
                       ) : null}
+                      {type === "vmail" ? (
+                        <label className="flex items-center gap-3 pt-8 text-sm text-stone-700">
+                          <Checkbox checked={Boolean(provider.auto_load_domains ?? true)} onCheckedChange={(checked) => updateProvider(index, { auto_load_domains: Boolean(checked) })} disabled={config.enabled} />
+                          自动从 Vmail 获取 Domain
+                        </label>
+                      ) : null}
                       {type === "tempmail_lol" || type === "moemail" || type === "duckmail" || type === "gptmail" || type === "yyds_mail" ? (
                         <div className="space-y-2">
                           <label className="text-sm text-stone-700">API Key</label>
@@ -260,10 +269,17 @@ export function RegisterCard() {
                       ) : null}
                     </div>
 
-                    {type === "cloudmail_gen" || type === "tempmail_lol" || type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" || type === "ddg_mail" ? (
+                    {type === "cloudmail_gen" || type === "tempmail_lol" || type === "cloudflare_temp_email" || type === "moemail" || type === "inbucket" || type === "yyds_mail" || type === "ddg_mail" || type === "vmail" ? (
                       <div className="space-y-2">
                         <label className="text-sm text-stone-700">{type === "cloudmail_gen" ? "邮箱域名" : type === "inbucket" ? "基础域名列表" : "Domain"}</label>
-                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()) })} placeholder={type === "cloudmail_gen" ? "每行一个域名，留空则使用服务默认域名" : type === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : type === "moemail" ? "每行一个域名" : "每行一个域名，留空则使用服务默认域名"} className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                        <Textarea value={domains} onChange={(event) => updateProvider(index, { domain: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder={type === "cloudmail_gen" ? "每行一个域名，留空则使用服务默认域名" : type === "inbucket" ? "每行一个基础域名，系统会自动生成随机子域名" : type === "vmail" ? "留空则自动从 /config 获取 emailDomain；也可以每行一个手动指定" : type === "moemail" ? "每行一个域名" : "每行一个域名，留空则使用服务默认域名"} className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                      </div>
+                    ) : null}
+                    {type === "vmail" ? (
+                      <div className="space-y-2">
+                        <label className="text-sm text-stone-700">排除 Domain</label>
+                        <Textarea value={excludeDomains} onChange={(event) => updateProvider(index, { exclude_domains: event.target.value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean) })} placeholder="每行一个不希望使用的后缀，例如 csq.qzz.io" className="min-h-20 rounded-xl border-stone-200 bg-white font-mono text-xs" disabled={config.enabled} />
+                        <p className="text-xs text-stone-500">创建邮箱时会先从 Vmail 自动获取可用后缀，再过滤这里填写的域名。</p>
                       </div>
                     ) : null}
                     {type === "cloudmail_gen" ? (

@@ -731,7 +731,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           ...state.registerConfig.mail,
           providers: [
             ...(state.registerConfig.mail.providers || []),
-            { enable: true, type: "cloudmail_gen", api_base: "", admin_email: "", admin_password: "", domain: [], subdomain: [], email_prefix: "" },
+            { enable: true, type: "vmail", api_base: "https://vmail.liu954326053.workers.dev", domain: [], auto_load_domains: true, exclude_domains: [] },
           ],
         },
       },

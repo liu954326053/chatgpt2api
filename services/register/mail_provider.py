@@ -460,7 +460,21 @@ def _normalize_string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value or "").strip()
-    return [text] if text else []
+    if not text:
+        return []
+    return [item.strip() for item in re.split(r"[\n,]+", text) if item.strip()]
+
+
+def _normalize_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
 
 
 def _create_session(conf: dict):
@@ -1229,10 +1243,14 @@ class VmailProvider(BaseMailProvider):
         self.api_base = str(entry.get("api_base") or "https://vmail.liu954326053.workers.dev").rstrip("/")
         raw_domains = entry.get("domain") or []
         self.domain = _normalize_string_list(raw_domains)
-        self.exclude_domains = {str(item).strip().lower() for item in (entry.get("exclude_domains") or entry.get("exclude_domain") or []) if str(item).strip()}
+        self.exclude_domains = {
+            str(item).strip().lower()
+            for item in _normalize_string_list(entry.get("exclude_domains") or entry.get("exclude_domain") or [])
+            if str(item).strip()
+        }
         for domain in self.exclude_domains:
             disable_domain(domain)
-        self.auto_load_domains = bool(entry.get("auto_load_domains", True))
+        self.auto_load_domains = _normalize_bool(entry.get("auto_load_domains"), True)
         self.session = _create_session(conf)
         self.session.headers.update(
             {
