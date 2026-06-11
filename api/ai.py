@@ -220,8 +220,25 @@ def create_router() -> APIRouter:
         model = str(payload["model"])
         call = LoggedCall(identity, "/v1/images/edits", model, "图生图", request_text=prompt)
         await filter_or_log(call, prompt)
-        payload["images"] = await read_image_sources(image_sources)
+        images = await read_image_sources(image_sources)
+        payload["images"] = images
         payload["base_url"] = resolve_image_base_url(request)
+        if _is_background_task(payload.get("background")):
+            if payload.get("stream"):
+                raise HTTPException(status_code=400, detail={"error": "background tasks do not support stream=true"})
+            task = await run_in_threadpool(
+                image_task_service.submit_edit,
+                identity,
+                client_task_id=_background_task_id(payload.get("client_task_id")),
+                prompt=prompt,
+                model=model,
+                size=payload["size"],
+                quality=payload["quality"],
+                base_url=payload["base_url"],
+                images=images,
+            )
+            call.log("后台任务已创建", {"task_id": task.get("id"), "status": task.get("status")})
+            return _image_generation_task_response(task)
         return await call.run(openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")

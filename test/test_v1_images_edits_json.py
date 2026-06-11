@@ -68,6 +68,45 @@ class ImageEditsJsonApiTests(unittest.TestCase):
         self.assertEqual(payload["images"], [(b"fake-png", "image_1.png", "image/png")])
         self.assertEqual(payload["size"], "1024x1536")
 
+    def test_image_edit_background_creates_async_task(self):
+        submit_calls = []
+
+        def fake_submit_edit(identity, **kwargs):
+            submit_calls.append((identity, kwargs))
+            return {
+                "id": kwargs["client_task_id"],
+                "status": "queued",
+                "model": kwargs["model"],
+                "created_at": "2026-06-11 10:00:00",
+            }
+
+        with mock.patch.object(ai_module.image_task_service, "submit_edit", fake_submit_edit):
+            response = self.client.post(
+                "/v1/images/edits",
+                headers=AUTH_HEADERS,
+                json={
+                    "model": "gpt-image-2",
+                    "prompt": "异步垫图",
+                    "image": PNG_DATA_URL,
+                    "background": True,
+                    "client_task_id": "imgtask_custom",
+                    "size": "1024x1024",
+                    "quality": "auto",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["id"], "imgtask_custom")
+        self.assertEqual(body["object"], "image.generation")
+        self.assertEqual(body["status"], "queued")
+        self.assertFalse(self.calls)
+        self.assertEqual(len(submit_calls), 1)
+        _, kwargs = submit_calls[0]
+        self.assertEqual(kwargs["images"], [(b"fake-png", "image_1.png", "image/png")])
+        self.assertEqual(kwargs["prompt"], "异步垫图")
+        self.assertEqual(kwargs["model"], "gpt-image-2")
+
     def test_image_edit_accepts_json_multiple_images_and_b64_json(self):
         response = self.client.post(
             "/v1/images/edits",
